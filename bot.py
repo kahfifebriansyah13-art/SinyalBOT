@@ -67,6 +67,7 @@ def get_trending_global():
         except: pass
     return TRENDING_CACHE
 
+# === FILTER EARLY GAINER DETECTOR ===
 def analisa():
     tickers=get_tickers()
     if not tickers: return [],0,[],[]
@@ -79,40 +80,50 @@ def analisa():
         base=pair.split('_')[0].upper()
         if base in posisi or base in ['USDT','USDC']: continue
         try:
-            last=float(d['last']); low=float(d['low']); high=float(d['high']); vol=float(d['vol_idr'])
-            if vol < 500000000: continue
+            last=float(d['last']); low=float(d['low']); high=float(d['high']); vol=float(d['vol_idr']); open_price=float(d.get('open',last))
+            if vol < 300000000: continue
             if low==0: continue
             naik_low=(last-low)/low*100
-            if naik_low < 3.0: continue
+            naik_24 = (last-open_price)/open_price*100 if open_price>0 else 0
+            if naik_low < 2.0 or naik_low > 8.0: continue
+            if naik_24 < 0.5: continue
+            
             if TV_AVAILABLE:
                 ind_daily, sum_daily = get_tv_daily(f"{base}IDR")
-                if ind_daily:
-                    rsi_daily = ind_daily.get('RSI',55)
-                    ema9_daily = ind_daily.get('EMA9',0)
-                    ema21_daily = ind_daily.get('EMA21',0)
-                    sma20_daily = ind_daily.get('SMA20',0)
-                    open_daily = ind_daily.get('open',low)
-                    close_daily = ind_daily.get('close',last)
-                    candle_hijau = close_daily > open_daily
-                    ma_bullish = ema9_daily > ema21_daily and last > sma20_daily
-                    rsi_ok = 50 < rsi_daily < 68
-                    if not (candle_hijau and ma_bullish and rsi_ok):
-                        time.sleep(0.3)
-                        continue
-                    calon_trending.append((base, naik_low, vol, last, low, high, vol>=1000000000, rsi_daily, sum_daily.get('RECOMMENDATION','NEUTRAL'), open_daily, close_daily))
-                else:
-                    calon_trending.append((base, naik_low, vol, last, low, high, vol>=1000000000, 55, "NEUTRAL", low, last))
-            else:
-                calon_trending.append((base, naik_low, vol, last, low, high, vol>=1000000000, 55, "NEUTRAL", low, last))
-            time.sleep(0.4)
+                if not ind_daily: continue
+                rsi_daily = ind_daily.get('RSI',50)
+                ema9 = ind_daily.get('EMA9',0)
+                ema21 = ind_daily.get('EMA21',0)
+                sma20 = ind_daily.get('SMA20',0)
+                macd_m = ind_daily.get('MACD.macd',-999)
+                macd_s = ind_daily.get('MACD.signal',-999)
+                macd_hist = ind_daily.get('MACD.histogram',0)
+                open_d = ind_daily.get('open',low)
+                close_d = ind_daily.get('close',last)
+                
+                cond1 = close_d > open_d
+                cond2 = 45 < rsi_daily < 62
+                cond3 = last > sma20
+                cond4 = ema9 > ema21 * 0.998
+                cond5 = macd_hist > -0.2 or macd_m > macd_s
+                cond6 = last < high * 0.93
+                
+                if not (cond1 and cond2 and cond3 and cond4 and cond5 and cond6):
+                    continue
+                    
+                score = naik_low + (vol/1e9) + (rsi_daily-45)
+                calon_trending.append((base, naik_low, vol, last, low, high, vol>=800000000, rsi_daily, sum_daily.get('RECOMMENDATION',''), open_d, close_d, score, naik_24))
+            time.sleep(0.35)
         except: continue
-    calon_trending=sorted(calon_trending, key=lambda x: x[1], reverse=True)
-    for base, naik_low, vol, last, low, high, is_bandar, rsi_daily, rekom, open_d, close_d in calon_trending[:5]:
+        
+    calon_trending=sorted(calon_trending, key=lambda x: x[11], reverse=True)
+    for base, naik_low, vol, last, low, high, is_bandar, rsi_daily, rekom, open_d, close_d, score, naik_24 in calon_trending[:5]:
         entry=last
-        tipe = "BANDAR MASUK" if is_bandar else "AKAN TRENDING"
-        hasil.append({'base':base,'entry':entry,'tipe':tipe,'vol':vol,'bandar':is_bandar,'global': base in trending_global,'tp1':entry*1.05,'tp2':entry*1.10,'sl':entry*0.95,'naik':naik_low,'low':low,'high':high,'rsi':rsi_daily,'rekom':rekom,'open':open_d,'close':close_d})
+        tipe = "POTENSI GAINER" if not is_bandar else "EARLY BANDAR"
+        hasil.append({'base':base,'entry':entry,'tipe':tipe,'vol':vol,'bandar':is_bandar,'global': base in trending_global,'tp1':entry*1.05,'tp2':entry*1.10,'sl':entry*0.95,'naik':naik_low,'low':low,'high':high,'rsi':rsi_daily,'rekom':rekom,'open':open_d,'close':close_d,'naik24':naik_24})
     return hasil, len(tickers), trending_global, calon_trending
 
+# === CEK TP - WINRATE CUMA PAS CLOSING ===
 def cek_tp():
     posisi=load()
     if not posisi: return
@@ -121,18 +132,25 @@ def cek_tp():
         try:
             now=float(tickers[f"{base.lower()}_idr"]['last'])
             entry=data['entry_idr']
+            
+            # TP1 = cuma info TP1, tanpa winrate
             if now >= entry*1.05 and not data.get('tp1'):
-                stat = update_stat("TP1")
-                kirim(f"╔══════════════════╗\n║  ✅ TP1 +5% KENA  ║\n╚══════════════════╝\n💰 *{base}/IDR*\n📈 Entry: Rp {entry:,.0f}\n🚀 Now: Rp {now:,.0f}\n\n📊 *AKURASI UPDATE*\n🎯 Winrate: {stat['winrate']}% ({stat['tp1']+stat['tp2']}/{stat['total']})\n✅ TP1: {stat['tp1']} | 🏆 TP2: {stat['tp2']} | ❌ SL: {stat['sl']}")
+                update_stat("TP1")
+                kirim(f"✅ *TP1 +5% KENA*\n💰 {base}/IDR\nEntry: Rp {entry:,.0f}\nNow: Rp {now:,.0f}\nTahan untuk TP2 +10%")
                 data['tp1']=True; save(posisi)
+                
+            # TP2 = CLOSING + KIRIM WINRATE
             if now >= entry*1.10:
                 stat = update_stat("TP2")
-                kirim(f"╔══════════════════╗\n║ 🏆 TP2 +10% KENA  ║\n╚══════════════════╝\n💎 *{base}/IDR JACKPOT!*\n📈 Entry: Rp {entry:,.0f}\n🚀 Now: Rp {now:,.0f}\n\n📊 *AKURASI UPDATE*\n🎯 Winrate: {stat['winrate']}% ({stat['tp1']+stat['tp2']}/{stat['total']})\n✅ TP1: {stat['tp1']} | 🏆 TP2: {stat['tp2']} | ❌ SL: {stat['sl']}")
+                kirim(f"╔══════════════════╗\n║ 🏆 TP2 +10% CLOSING ║\n╚══════════════════╝\n💎 *{base}/IDR JACKPOT*\nEntry: Rp {entry:,.0f}\nNow: Rp {now:,.0f}\n\n📊 *STATISTIK CLOSING*\n🎯 Winrate: {stat['winrate']}% ({stat['tp1']+stat['tp2']}/{stat['total']})\n✅ TP1: {stat['tp1']} | 🏆 TP2: {stat['tp2']} | ❌ SL: {stat['sl']}")
                 del posisi[base]; save(posisi)
+                
+            # SL = CLOSING + KIRIM WINRATE
             if now <= entry*0.95:
                 stat = update_stat("SL")
-                kirim(f"╔══════════════════╗\n║  ⚠️ SL -5% KENA   ║\n╚══════════════════╝\n🔻 *{base}/IDR*\n📉 Entry: Rp {entry:,.0f}\n💔 Now: Rp {now:,.0f}\n\n📊 *AKURASI UPDATE*\n🎯 Winrate: {stat['winrate']}% ({stat['tp1']+stat['tp2']}/{stat['total']})\n✅ TP1: {stat['tp1']} | 🏆 TP2: {stat['tp2']} | ❌ SL: {stat['sl']}")
+                kirim(f"╔══════════════════╗\n║ 🛑 SL -5% CLOSING  ║\n╚══════════════════╝\n🔻 *{base}/IDR*\nEntry: Rp {entry:,.0f}\nNow: Rp {now:,.0f}\n\n📊 *STATISTIK CLOSING*\n🎯 Winrate: {stat['winrate']}% ({stat['tp1']+stat['tp2']}/{stat['total']})\n✅ TP1: {stat['tp1']} | 🏆 TP2: {stat['tp2']} | ❌ SL: {stat['sl']}")
                 del posisi[base]; save(posisi)
+                
         except: continue
 
 def cek_perintah_stat():
@@ -143,12 +161,12 @@ def cek_perintah_stat():
             chat = str(upd.get('message',{}).get('chat',{}).get('id',''))
             if chat == str(CHAT_ID) and '/stat' in txt.lower():
                 stat = load_stat()
-                kirim(f"📊 *STATISTIK AKURASI BOT*\n\n📈 Total Sinyal: {stat['total']}\n✅ TP1 +5%: {stat['tp1']}\n🏆 TP2 +10%: {stat['tp2']}\n❌ SL -5%: {stat['sl']}\n\n🎯 *WINRATE: {stat['winrate']}%*\n\nRumus: (TP1+TP2)/Total x 100%\nKetik /stat untuk cek kapanpun")
+                kirim(f"📊 *STATISTIK AKURASI BOT*\n\n📈 Total Sinyal: {stat['total']}\n✅ TP1 +5%: {stat['tp1']}\n🏆 TP2 +10%: {stat['tp2']}\n❌ SL -5%: {stat['sl']}\n\n🎯 *WINRATE: {stat['winrate']}%*")
     except: pass
 
 def main():
     stat = load_stat()
-    kirim(f"🚀 *BOT FINAL AKTIF*\n✅ TP1 +5% | TP2 +10% | SL -5%\n✅ Daily Hijau + MA + RSI 50-68 + Vol 500jt\n✅ Tanpa Dekat High = Sinyal Lancar\n📊 Akurasi Saat Ini: {stat['winrate']}% ({stat['total']} sinyal)\nKetik /stat untuk cek winrate")
+    kirim(f"🚀 *BOT EARLY GAINER AKTIF*\n🔍 Deteksi koin MAU trending (2-8% dari low)\n📈 RSI 45-62 | Break SMA20 | EMA9 nempel 21 | Vol 300jt\n✅ TP1 +5% (tanpa winrate) | 🏆 TP2 +10% & SL -5% (closing + winrate)\n📊 Winrate saat ini: {stat['winrate']}% | Ketik /stat cek manual")
     last_stat_check = time.time()
     while True:
         try:
@@ -162,8 +180,8 @@ def main():
                 for s in sinyal:
                     if s['base'] in posisi: continue
                     gtag="🔥 GLOBAL" if s['global'] else "💎 LOCAL"
-                    judul = f"🐋 BANDAR - {s['base']}/IDR" if s['bandar'] else f"{s['base']}/IDR - {s['tipe']}"
-                    kirim(f"╔════════════════════════╗\n║ {judul} ║\n╚════════════════════════╝\n\n{'🐋 BANDAR MASUK' if s['bandar'] else '🚀 AKAN TRENDING'} {gtag}\n\n┏━ 🕯️ DAILY CANDLE + MA RSI VOL ━┓\n┃ 🟢 Open: Rp {s['open']:,.0f} | Close: Rp {s['close']:,.0f} (HIJAU)\n┃ 📊 RSI Daily: {s['rsi']:.1f} + MA Bullish\n┃ 🤖 Rekom: {s['rekom']}\n┗━━━━━━━━━━━━━━━┛\n\n┏━ 📊 MARKET DATA ━┓\n┃ 📈 Naik: +{s['naik']:.2f}% dari Low\n┃ 💧 Low: Rp {s['low']:,.0f} | High: Rp {s['high']:,.0f}\n┃ 💰 Vol: Rp {s['vol']/1e9:.2f} M\n┗━━━━━━━━━━━━━━━┛\n\n┏━ 🎯 TRADING PLAN ━┓\n┃ 🟢 ENTRY: Rp {s['entry']:,.0f}\n┃ 🎯 TP1: Rp {s['tp1']:,.0f} (+5%)\n┃ 🏆 TP2: Rp {s['tp2']:,.0f} (+10%)\n┃ 🛑 SL: Rp {s['sl']:,.0f} (-5%)\n┗━━━━━━━━━━━━━━━┛\n\n⚡ *ENTRY SEKARANG!*")
+                    judul = f"🐋 EARLY BANDAR {s['base']}/IDR" if s['bandar'] else f"{s['base']}/IDR POTENSI GAINER"
+                    kirim(f"╔════════════════════════╗\n║ {judul} ║\n╚════════════════════════╝\n\n{'🐋 BANDAR AWAL' if s['bandar'] else '🚀 MAU TRENDING'} {gtag}\n\n┏━ 🔍 EARLY DETECTION ━┓\n┃ 🟢 Open: Rp {s['open']:,.0f} -> Close: Rp {s['close']:,.0f} (HIJAU AWAL)\n┃ 📊 RSI: {s['rsi']:.1f} (baru lewat 50) | Break SMA20\n┃ 📈 Naik dari Low: +{s['naik']:.2f}% | Hari ini: +{s['naik24']:.2f}%\n┃ 💧 High: Rp {s['high']:,.0f} (masih jauh, ruang naik besar)\n┃ 💰 Vol: Rp {s['vol']/1e9:.2f} M\n┗━━━━━━━━━━━━━━━┛\n\n┏━ 🎯 TRADING PLAN ━┓\n┃ 🟢 ENTRY: Rp {s['entry']:,.0f}\n┃ 🎯 TP1: Rp {s['tp1']:,.0f} (+5%)\n┃ 🏆 TP2: Rp {s['tp2']:,.0f} (+10%)\n┃ 🛑 SL: Rp {s['sl']:,.0f} (-5%)\n┗━━━━━━━━━━━━━━━┛\n\n⚡ *ENTRY AWAL SEBELUM JADI GAINER!*")
                     posisi[s['base']]={'entry_idr':s['entry'],'tipe':s['tipe']}; save(posisi)
             time.sleep(45)
         except Exception as e:
