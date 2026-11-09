@@ -1,5 +1,5 @@
 import requests, os, time, json, sys
-print("BOT V2.4 HYBRID STARTING...", flush=True)
+print("BOT V2.4 FIXED STARTING...", flush=True)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -16,8 +16,7 @@ except:
 
 def kirim(pesan):
     try:
-        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
-        data={"chat_id": CHAT_ID, "text": pesan, "parse_mode": "Markdown"}, timeout=15)
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", data={"chat_id": CHAT_ID, "text": pesan, "parse_mode": "Markdown"}, timeout=15)
     except Exception as e:
         print(f"KIRIM GAGAL: {e}", flush=True)
 
@@ -57,7 +56,6 @@ def get_tv(symbol, tf="1d"):
         print(f"TV FAIL {symbol} {tf}: {e}", flush=True)
         return None
 
-# === V2.4 HYBRID - ENTRY GAK KETINGGALAN MOMENTUM ===
 def analisa():
     tickers=get_tickers()
     if not tickers: return []
@@ -75,12 +73,10 @@ def analisa():
             range_hl = high-low
             posisi_harga = (last-low)/range_hl*100 if range_hl>0 else 50
 
-            # FILTER UTAMA ANTI KETINGGALAN: 0.3% - 5% = PALING AWAL
             if not (0.3 <= naik_low <= 5.0): continue
-            if vol < 120000000: continue  # 120jt biar lebih awal
-            if last >= high * 0.93: continue  # masih 7% di bawah high
+            if vol < 120000000: continue
+            if last >= high * 0.93: continue
 
-            # === COBA PAKAI TV ===
             ind_d = get_tv(f"{base}IDR","1d")
             ind_1h = get_tv(f"{base}IDR","1h")
             
@@ -91,7 +87,6 @@ def analisa():
             }
 
             if ind_d and ind_1h:
-                # MODE TV - AKURASI TINGGI 80%
                 rsi_d = ind_d.get('RSI',50)
                 rsi_1h = ind_1h.get('RSI',50)
                 ema9_1h = ind_1h.get('EMA9',0)
@@ -104,31 +99,24 @@ def analisa():
 
                 data_sinyal.update({'rsi_d':rsi_d,'rsi_1h':rsi_1h,'ema9':ema9_1h,'ema21':ema21_1h,'open_1h':open_1h,'close_1h':close_1h,'mode':'TV'})
                 
-                # FILTER EARLY PAKAI TV
                 if (40 <= rsi_d <= 64 and 45 <= rsi_1h <= 61 and 
                     ema9_1h > ema21_1h * 0.996 and close_1h >= open_1h and
                     macd > macd_sig * 0.98 and last > sma20_d * 0.97):
                     is_valid = True
             else:
-                # FALLBACK TANPA TV - ANTI KETINGGALAN, AKURASI 68%
-                # Pengganti RSI: posisi harga di bawah 45% range = masih early
-                # Pengganti EMA: last > open hari ini = bullish awal
                 is_bullish = last > float(d.get('open',last))
-                
                 data_sinyal.update({'rsi_d':50,'rsi_1h':50,'ema9':0,'ema21':0,'open_1h':float(d.get('open',last)),'close_1h':last,'mode':'FALLBACK'})
-                
                 if posisi_harga < 42 and is_bullish and naik_low > 0.3:
                     is_valid = True
 
             if is_valid:
                 hasil.append(data_sinyal)
             
-            time.sleep(0.35) # biar gak kena rate limit
+            time.sleep(0.35)
         except Exception as e:
             print(f"ERR {base}: {e}", flush=True)
             continue
 
-    # Sort by volume biar yang bandar besar masuk dulu = momentum kuat
     return sorted(hasil, key=lambda x: x['vol'], reverse=True)[:4]
 
 def cek_tp():
@@ -137,11 +125,12 @@ def cek_tp():
     tickers=get_tickers()
     for base,data in list(posisi.items()):
         try:
-            now=float(tickers[f"{base.lower()}_idr"]['last"])
+            ticker_key = base.lower() + '_idr'
+            now=float(tickers[ticker_key]['last'])
             entry=data['entry']
             if now >= entry*1.05 and not data.get('tp1'):
                 update_stat("TP1")
-                kirim(f"✅ *TP1 +5% KENA*\n💰 {base}/IDR\nEntry Rp {entry:,.0f} -> Now Rp {now:,.0f}\nTahan ke TP2 - Momentum masih jalan")
+                kirim(f"✅ *TP1 +5% KENA*\n💰 {base}/IDR\nEntry Rp {entry:,.0f} -> Now Rp {now:,.0f}\nTahan ke TP2")
                 data['tp1']=True; save(posisi)
             if now >= entry*1.10:
                 stat=update_stat("TP2")
@@ -154,7 +143,7 @@ def cek_tp():
         except: continue
 
 def main():
-    kirim("🚀 *BOT V2.4 HYBRID FINAL AKTIF*\n⚡ Entry Anti Ketinggalan: 0.3-5% dari Low\n✅ Candle: 1H Hijau Awal\n✅ Vol: >120jt (Bandar Baru Masuk)\n✅ Teknikal: TV Mode = RSI D 40-64 + RSI 1H 45-61 + EMA Cross\n✅ Fallback = Posisi <42% Range (Tanpa TV tetap early)\n📈 TP1 5% | TP2 10% | SL 5%\n🔄 Cek tiap 40 detik - Gak bakal ketinggalan momentum!")
+    kirim("🚀 *BOT V2.4 FIXED AKTIF*\n⚡ Entry Anti Ketinggalan 0.3-5% Low\nVol >120jt | Posisi <42% Range\nTV Mode + Fallback | Cek 40 detik")
     print("MAIN LOOP START", flush=True)
     while True:
         try:
@@ -165,10 +154,10 @@ def main():
                 pos=load()
                 for s in sinyal:
                     if s['base'] in pos: continue
-                    mode_text = "📊 TV AKURAT" if s['mode']=='TV' else "⚡ FALLBACK CEPAT"
-                    kirim(f"╔════════════════════╗\n║ 🚀 EARLY {s['base']}/IDR {mode_text} ║\n╚════════════════════╝\n\n📈 *ENTRY GAK KETINGGALAN*\nBaru Naik: +{s['naik']:.2f}% dari Low\nPosisi: {s['posisi']:.0f}% dari Range Harian ( <42% = Masih di Bawah )\n💰 Vol: Rp {s['vol']/1e9:.2f}M\n💧 Low Rp {s['low']:,.0f} | High Rp {s['high']:,.0f} | Ruang +{((s['high']/s['entry'])-1)*100:.1f}%\n\n{'📊 RSI D: '+str(round(s['rsi_d'],1))+' | RSI 1H: '+str(round(s['rsi_1h'],1)) if s['mode']=='TV' else '📊 Mode Fallback - Harga masih di bawah'}\n\n🎯 ENTRY: Rp {s['entry']:,.0f}\n🎯 TP1: Rp {s['tp1']:,.0f} (+5%)\n🏆 TP2: Rp {s['tp2']:,.0f} (+10%)\n🛑 SL: Rp {s['sl']:,.0f} (-5%)\n\n⚡ *MASUK SEKARANG - MOMENTUM BARU MULAI!*")
+                    mode_text = "TV AKURAT" if s['mode']=='TV' else "FALLBACK CEPAT"
+                    kirim(f"🚀 *EARLY {s['base']}/IDR {mode_text}*\nNaik +{s['naik']:.2f}% dari Low\nPosisi {s['posisi']:.0f}% Range\nVol Rp {s['vol']/1e9:.2f}M\nLow Rp {s['low']:,.0f} | High Rp {s['high']:,.0f}\nENTRY Rp {s['entry']:,.0f}\nTP1 Rp {s['tp1']:,.0f} | TP2 Rp {s['tp2']:,.0f} | SL Rp {s['sl']:,.0f}\n\n⚡ MOMENTUM BARU MULAI!")
                     pos[s['base']]={'entry':s['entry']}; save(pos)
-            time.sleep(40) # cek tiap 40 detik biar gak ketinggalan
+            time.sleep(40)
         except Exception as e:
             print(f"MAIN ERROR: {e}", flush=True)
             time.sleep(20)
