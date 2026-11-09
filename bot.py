@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 FILE = "posisi_aktif.json"
+FILE_STAT = "statistik.json"
 
 TRENDING_CACHE = ["BTC","ETH","SOL","PEPE","DOGE"]
 LAST_TREND_UPDATE = datetime.now() - timedelta(hours=1)
@@ -25,6 +26,24 @@ def load():
     except: return {}
 def save(d):
     with open(FILE,'w') as f: json.dump(d,f)
+
+def load_stat():
+    try:
+        with open(FILE_STAT,'r') as f: return json.load(f)
+    except: return {"total":0,"tp1":0,"tp2":0,"sl":0,"winrate":0}
+def save_stat(s):
+    with open(FILE_STAT,'w') as f: json.dump(s,f)
+
+def update_stat(hasil):
+    stat = load_stat()
+    stat["total"] += 1
+    if hasil == "TP1": stat["tp1"] += 1
+    if hasil == "TP2": stat["tp2"] += 1
+    if hasil == "SL": stat["sl"] += 1
+    win = stat["tp1"] + stat["tp2"]
+    stat["winrate"] = round(win / stat["total"] * 100, 2) if stat["total"]>0 else 0
+    save_stat(stat)
+    return stat
 
 def get_tickers():
     try: return requests.get("https://indodax.com/api/tickers", timeout=10).json()['tickers']
@@ -103,21 +122,40 @@ def cek_tp():
             now=float(tickers[f"{base.lower()}_idr"]['last'])
             entry=data['entry_idr']
             if now >= entry*1.05 and not data.get('tp1'):
-                kirim(f"╔══════════════════╗\n║  ✅ TP1 +5% KENA  ║\n╚══════════════════╝\n💰 *{base}/IDR*\n📈 Entry: Rp {entry:,.0f}\n🚀 Now: Rp {now:,.0f}\n💹 Profit: +5%")
+                stat = update_stat("TP1")
+                kirim(f"╔══════════════════╗\n║  ✅ TP1 +5% KENA  ║\n╚══════════════════╝\n💰 *{base}/IDR*\n📈 Entry: Rp {entry:,.0f}\n🚀 Now: Rp {now:,.0f}\n\n📊 *AKURASI UPDATE*\n🎯 Winrate: {stat['winrate']}% ({stat['tp1']+stat['tp2']}/{stat['total']})\n✅ TP1: {stat['tp1']} | 🏆 TP2: {stat['tp2']} | ❌ SL: {stat['sl']}")
                 data['tp1']=True; save(posisi)
             if now >= entry*1.10:
-                kirim(f"╔══════════════════╗\n║ 🏆 TP2 +10% KENA  ║\n╚══════════════════╝\n💎 *{base}/IDR JACKPOT +10%!*")
+                stat = update_stat("TP2")
+                kirim(f"╔══════════════════╗\n║ 🏆 TP2 +10% KENA  ║\n╚══════════════════╝\n💎 *{base}/IDR JACKPOT!*\n📈 Entry: Rp {entry:,.0f}\n🚀 Now: Rp {now:,.0f}\n\n📊 *AKURASI UPDATE*\n🎯 Winrate: {stat['winrate']}% ({stat['tp1']+stat['tp2']}/{stat['total']})\n✅ TP1: {stat['tp1']} | 🏆 TP2: {stat['tp2']} | ❌ SL: {stat['sl']}")
                 del posisi[base]; save(posisi)
             if now <= entry*0.95:
-                kirim(f"╔══════════════════╗\n║  ⚠️ SL -5% KENA   ║\n╚══════════════════╝\n🔻 *{base}/IDR*\n📉 Entry: Rp {entry:,.0f}\n💔 Now: Rp {now:,.0f}\n💔 Loss: -5%")
+                stat = update_stat("SL")
+                kirim(f"╔══════════════════╗\n║  ⚠️ SL -5% KENA   ║\n╚══════════════════╝\n🔻 *{base}/IDR*\n📉 Entry: Rp {entry:,.0f}\n💔 Now: Rp {now:,.0f}\n\n📊 *AKURASI UPDATE*\n🎯 Winrate: {stat['winrate']}% ({stat['tp1']+stat['tp2']}/{stat['total']})\n✅ TP1: {stat['tp1']} | 🏆 TP2: {stat['tp2']} | ❌ SL: {stat['sl']}")
                 del posisi[base]; save(posisi)
         except: continue
 
+def cek_perintah_stat():
+    try:
+        r = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?limit=5", timeout=5).json()
+        for upd in r.get('result',[]):
+            txt = upd.get('message',{}).get('text','')
+            chat = str(upd.get('message',{}).get('chat',{}).get('id',''))
+            if chat == str(CHAT_ID) and '/stat' in txt.lower():
+                stat = load_stat()
+                kirim(f"📊 *STATISTIK AKURASI BOT*\n\n📈 Total Sinyal: {stat['total']}\n✅ TP1 +5%: {stat['tp1']}\n🏆 TP2 +10%: {stat['tp2']}\n❌ SL -5%: {stat['sl']}\n\n🎯 *WINRATE: {stat['winrate']}%*\n\nRumus: (TP1+TP2)/Total x 100%\nKetik /stat untuk cek kapanpun")
+    except: pass
+
 def main():
-    kirim("🚀 *BOT FINAL TP 5% SL -5% AKTIF*\n✅ Tanpa Dekat High - Sinyal Lancar\n✅ Vol 500jt + Naik 3% + Daily Hijau + MA Bullish + RSI 50-68\n✅ TP1 +5% TP2 +10% SL -5% | Deteksi Bandar >1M")
+    stat = load_stat()
+    kirim(f"🚀 *BOT FINAL AKTIF*\n✅ TP1 +5% | TP2 +10% | SL -5%\n✅ Daily Hijau + MA + RSI 50-68 + Vol 500jt\n✅ Tanpa Dekat High = Sinyal Lancar\n📊 Akurasi Saat Ini: {stat['winrate']}% ({stat['total']} sinyal)\nKetik /stat untuk cek winrate")
+    last_stat_check = time.time()
     while True:
         try:
             cek_tp()
+            if time.time() - last_stat_check > 30:
+                cek_perintah_stat()
+                last_stat_check = time.time()
             sinyal,total,trend_global,detail=analisa()
             if sinyal:
                 posisi=load()
@@ -125,7 +163,7 @@ def main():
                     if s['base'] in posisi: continue
                     gtag="🔥 GLOBAL" if s['global'] else "💎 LOCAL"
                     judul = f"🐋 BANDAR - {s['base']}/IDR" if s['bandar'] else f"{s['base']}/IDR - {s['tipe']}"
-                    kirim(f"╔════════════════════════╗\n║ {judul} ║\n╚════════════════════════╝\n\n{'🐋 BANDAR MASUK' if s['bandar'] else '🚀 AKAN TRENDING'} {gtag}\n\n┏━ 🕯️ DAILY CANDLE + MA RSI VOL ━┓\n┃ 🟢 Open: Rp {s['open']:,.0f} | Close: Rp {s['close']:,.0f} (HIJAU)\n┃ 📊 RSI Daily: {s['rsi']:.1f} (50-68 Optimal)\n┃ 🔀 MA Bullish: EMA9>EMA21 + Harga>SMA20\n┃ 🤖 Rekom: {s['rekom']}\n┗━━━━━━━━━━━━━━━┛\n\n┏━ 📊 MARKET DATA ━┓\n┃ 📈 Naik: +{s['naik']:.2f}% dari Low\n┃ 💧 Low: Rp {s['low']:,.0f} | High: Rp {s['high']:,.0f}\n┃ 💰 Vol: Rp {s['vol']/1e9:.2f} Miliar\n┗━━━━━━━━━━━━━━━┛\n\n┏━ 🎯 TRADING PLAN ━┓\n┃ 🟢 ENTRY: Rp {s['entry']:,.0f}\n┃ 🎯 TP1: Rp {s['tp1']:,.0f} (+5%)\n┃ 🏆 TP2: Rp {s['tp2']:,.0f} (+10%)\n┃ 🛑 SL: Rp {s['sl']:,.0f} (-5%)\n┗━━━━━━━━━━━━━━━┛\n\n⚡ *ENTRY SEKARANG TP 5% CEPAT!*")
+                    kirim(f"╔════════════════════════╗\n║ {judul} ║\n╚════════════════════════╝\n\n{'🐋 BANDAR MASUK' if s['bandar'] else '🚀 AKAN TRENDING'} {gtag}\n\n┏━ 🕯️ DAILY CANDLE + MA RSI VOL ━┓\n┃ 🟢 Open: Rp {s['open']:,.0f} | Close: Rp {s['close']:,.0f} (HIJAU)\n┃ 📊 RSI Daily: {s['rsi']:.1f} + MA Bullish\n┃ 🤖 Rekom: {s['rekom']}\n┗━━━━━━━━━━━━━━━┛\n\n┏━ 📊 MARKET DATA ━┓\n┃ 📈 Naik: +{s['naik']:.2f}% dari Low\n┃ 💧 Low: Rp {s['low']:,.0f} | High: Rp {s['high']:,.0f}\n┃ 💰 Vol: Rp {s['vol']/1e9:.2f} M\n┗━━━━━━━━━━━━━━━┛\n\n┏━ 🎯 TRADING PLAN ━┓\n┃ 🟢 ENTRY: Rp {s['entry']:,.0f}\n┃ 🎯 TP1: Rp {s['tp1']:,.0f} (+5%)\n┃ 🏆 TP2: Rp {s['tp2']:,.0f} (+10%)\n┃ 🛑 SL: Rp {s['sl']:,.0f} (-5%)\n┗━━━━━━━━━━━━━━━┛\n\n⚡ *ENTRY SEKARANG!*")
                     posisi[s['base']]={'entry_idr':s['entry'],'tipe':s['tipe']}; save(posisi)
             time.sleep(45)
         except Exception as e:
