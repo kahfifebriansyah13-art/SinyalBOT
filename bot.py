@@ -1,7 +1,7 @@
 import os, time, json, requests, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta, timezone
-print("BOT V6.9.2 FIX 24H...", flush=True)
+print("BOT V6.9.3 FINAL 24H...", flush=True)
 TOKEN=os.getenv("BOT_TOKEN"); CHAT_ID=os.getenv("CHAT_ID")
 FILE_POS="posisi.json"; FILE_COOLDOWN="cooldown.json"; FILE_HISTORY="history.json"; FILE_LAST="last_update.json"; FILE_STATS="stats.json"
 
@@ -9,7 +9,7 @@ def now(): return datetime.now(timezone.utc)+timedelta(hours=7)
 def jam(): return now().strftime("%H:%M WIB")
 
 class H(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK V6.9.2")
+    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK V6.9.3")
     def log_message(self,*a): return
 threading.Thread(target=lambda: HTTPServer(("0.0.0.0",int(os.getenv("PORT",8080))),H).serve_forever(),daemon=True).start()
 
@@ -33,32 +33,37 @@ def fmt_money(m):
     if m>=1000: return f"{m/1000:.0f}K"
     return f"{m:.0f}"
 
-HEADERS={"User-Agent":"Mozilla/5.0"}
+HEADERS={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 def get_data():
     try:
-        # summaries ada harga 24h yang sama dengan di search Indodax
-        summ=requests.get("https://indodax.com/api/summaries",timeout=15,headers=HEADERS).json()
-        tickers=summ.get('tickers',{})
-        prices_24h=summ.get('prices_24h',{})
-        return tickers, prices_24h
-    except:
+        r=requests.get("https://indodax.com/api/summaries",timeout=15,headers=HEADERS).json()
+        tickers=r.get('tickers',{})
+        p24=r.get('prices_24h',{})
+        p7=r.get('prices_7d',{})
+        # Debug: print contoh HBAR
+        if 'hbar_idr' in tickers and 'hbar_idr' in p24:
+            print(f"DEBUG HBAR last={tickers['hbar_idr'].get('last')} p24={p24['hbar_idr']} type={type(p24['hbar_idr'])}",flush=True)
+        return tickers, p24
+    except Exception as e:
+        print(f"SUMMARIES ERR {e}",flush=True)
         try:
             t=requests.get("https://indodax.com/api/tickers",timeout=10,headers=HEADERS).json()['tickers']
             return t, {}
-        except:
-            return {}, {}
+        except: return {}, {}
 
 def get_ob(base):
-    try:
-        r=requests.get(f"https://indodax.com/api/{base.lower()}_idr/depth",timeout=8,headers=HEADERS)
-        if not r.text or r.text[0]!='{': raise Exception("not json")
-        data=r.json(); bids=data.get('buy',[]); asks=data.get('sell',[])
-        tb=sum(float(p)*float(q) for p,q in bids[:15]); ts=sum(float(p)*float(q) for p,q in asks[:15])
-        spread=(float(asks[0][0])-float(bids[0][0]))/float(bids[0][0])*100
-        return {'buy':tb,'sell':ts,'buy_m':tb,'sell_m':ts,'spread':spread,'ratio':tb/ts if ts else 2,'fallback':False}
-    except:
-        return {'buy':100,'sell':10,'buy_m':100,'sell_m':10,'spread':0.5,'ratio':1.2,'fallback':True}
+    for _ in range(3):
+        try:
+            rr=requests.get(f"https://indodax.com/api/{base.lower()}_idr/depth",timeout=8,headers=HEADERS)
+            if not rr.text or rr.text[0]!='{': time.sleep(0.5); continue
+            data=rr.json(); bids=data.get('buy',[]); asks=data.get('sell',[])
+            if not bids or not asks: continue
+            tb=sum(float(p)*float(q) for p,q in bids[:15]); ts=sum(float(p)*float(q) for p,q in asks[:15])
+            spread=(float(asks[0][0])-float(bids[0][0]))/float(bids[0][0])*100
+            return {'buy':tb,'sell':ts,'buy_m':tb,'sell_m':ts,'spread':spread,'ratio':tb/ts if ts else 2,'fallback':False}
+        except: time.sleep(0.3)
+    return {'buy':100,'sell':10,'buy_m':100,'sell_m':10,'spread':0.5,'ratio':1.2,'fallback':True}
 
 def get_candle(base):
     try:
@@ -66,6 +71,25 @@ def get_candle(base):
         last=float(tr[0]['price']); avg=sum(float(x['price']) for x in tr)/len(tr)
         return {'bull':last>=avg,'note':'Candle Bull ✅' if last>=avg else 'Candle Bear ❌'}
     except: return {'bull':True,'note':'Candle Bull ✅'}
+
+def calc_24h_change(last, p24_val):
+    try:
+        # p24 bisa angka, bisa list, bisa dict
+        if isinstance(p24_val, (int,float,str)):
+            prev=float(p24_val)
+            if prev==0: return 0
+            return (last-prev)/prev*100
+        if isinstance(p24_val, list) and p24_val:
+            # kalau list harga, ambil yang pertama
+            first=float(p24_val[0])
+            if first==0: return 0
+            return (last-first)/first*100
+        if isinstance(p24_val, dict):
+            first=float(p24_val.get('price',0) or p24_val.get('last',0))
+            if first==0: return 0
+            return (last-first)/first*100
+    except: pass
+    return 0
 
 def analisa():
     tickers, prices24h=get_data()
@@ -87,23 +111,24 @@ def analisa():
             pos_p=(last-low)/(high-low)*100 if high!=low else 50
             gain_low=(last-low)/low*100
             
-            # Ambil % 24h yang sama dengan di search Indodax
-            p24=prices24h.get(pid,[]) 
-            # p24 adalah list harga 24h terakhir, hitung % dari harga pertama
-            if p24 and len(p24)>1:
-                first=float(p24[0]); change24=(last-first)/first*100 if first else 0
-            else:
-                change24=gain_low # fallback kalau api 24h kosong
+            # Hitung 24h yang SAMA dengan search Indodax
+            p24_raw=prices24h.get(pid,0)
+            change24=calc_24h_change(last,p24_raw)
             
-            # FIX: Harus Pos>45% DAN 24h >0 biar sama kayak di Indodax hijau
+            # Kalau prices_24h kosong, jangan pakai gain_low, pakai 0 biar tidak menyesatkan
+            if prices24h and change24==0:
+                continue # skip kalau data 24h tidak ada
+            
+            # FILTER: Pos>45% + 24h hijau >0.5% (sesuai Indodax search hijau)
             if pos_p < 45: continue
-            if change24 < 0.5: continue # kalau di Indodax merah, skip
+            if change24 < 0.5: continue
             
             cands.append((base,last,low,high,gain_low,pos_p,vol,change24))
-        except: continue
+        except Exception as e:
+            continue
 
-    cands=sorted(cands,key=lambda x:x[5],reverse=True)[:25]
-    print(f"SCAN V6.9.2 {jam()}: {len(cands)} kandidat",flush=True)
+    cands=sorted(cands,key=lambda x:x[7],reverse=True)[:25]
+    print(f"SCAN V6.9.3 {jam()}: {len(cands)} kandidat 24h hijau",flush=True)
     scored=[]
     for base,last,low,high,gain_low,pos_p,vol,change24 in cands:
         ob=get_ob(base); candle=get_candle(base)
@@ -118,7 +143,7 @@ def fmt_tmg(s,r):
     ob=s['ob']; est=" EST" if ob['fallback'] else ""
     return f"""╔═══ #{r} {s['mode']} {s['base']}/IDR SCORE {s['score']} ═══╗
 ║ 🔥 {s['trend']} | {s['candle']['note']} - Pos {s['pos']:.0f}%
-║ 📈 24h {s['change24']:.2f}% | Low {s['gain']:.2f}% | Vol Rp {s['vol']/1e6:.0f}M
+║ 📈 24h {s['change24']:.2f}% (Indodax) | Low {s['gain']:.2f}% | Vol Rp {s['vol']/1e6:.0f}M
 ╠═══════════════════════════╣
 ║ 💰 OB BUY>SELL{est} ✅
 ║ 💵 Buy Rp {fmt_money(ob['buy_m'])} vs Sell Rp {fmt_money(ob['sell_m'])}
@@ -170,7 +195,7 @@ Aktif: {len(pos)}
     except: pass
 
 def main():
-    time.sleep(1); send(f"✅ *BOT V6.9.2 FIX 24H AKTIF - {jam()}*\nAngka 24h sama dengan search Indodax\nPos>45% + 24h hijau")
+    time.sleep(1); send(f"✅ *BOT V6.9.3 FIX 24H AKTIF - {jam()}*\n24h sekarang sama dengan search Indodax\nFilter Pos>45% + 24h hijau")
     loop=0
     while True:
         try:
