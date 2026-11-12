@@ -2,7 +2,7 @@ import os, time, json, requests, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta, timezone
 
-print("BOT V9.3-FINAL-100JT-HIGHLOW...", flush=True)
+print("BOT V9.4-DUAL-MODE-150JT-HIGHLOW...", flush=True)
 TOKEN=os.getenv("BOT_TOKEN")
 CHAT_ID=os.getenv("CHAT_ID")
 
@@ -11,13 +11,13 @@ FILE_POS="posisi.json"; FILE_COOLDOWN="cooldown.json"; FILE_HISTORY="history.jso
 MILIAR=1_000_000_000
 TRILIUN=1_000_000_000_000
 JUTA=1_000_000
-FILTER_VOL_MIN=100*JUTA # VOL >100 JUTA SESUAI REQUEST
+FILTER_VOL_MIN=150*JUTA # VOL >150 JUTA SESUAI REQUEST TERAKHIR
 
 def now(): return datetime.now(timezone.utc)+timedelta(hours=7)
 def jam(): return now().strftime("%H:%M WIB")
 
 class H(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK V9.3 100JT HIGHLOW")
+    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK V9.4 DUAL 150JT")
     def log_message(self,*a): return
 threading.Thread(target=lambda: HTTPServer(("0.0.0.0",int(os.getenv("PORT",8080))),H).serve_forever(),daemon=True).start()
 
@@ -123,7 +123,7 @@ def analisa():
         if base in pos or base in cooldown or base in ['USDT','USDC','IDR','DAI']: continue
         try:
             last=float(d['last']); low=float(d['low']); high=float(d['high']); vol=float(d['vol_idr']); source=d.get('source','INDODAX')
-            if vol < FILTER_VOL_MIN: continue # VOL >100 JUTA
+            if vol < FILTER_VOL_MIN: continue
             pos_p=(last-low)/(high-low)*100 if high!=low else 0
             if not (35 <= pos_p <= 75): continue
             gain_low=(last-low)/low*100 if low else 0
@@ -136,7 +136,13 @@ def analisa():
             if ob['spread'] > 2.0: continue
             candle=get_candle(base, source)
             if not candle['bull']: continue
-            cands.append({'base':base,'mode_label':'🛡️ HIGH WINRATE','mode':'KOREKSI BUY','entry':last,'gain':gain_low,'pos':pos_p,'vol':vol,'high':high,'low':low,'tp1':last*1.05,'tp2':last*1.10,'tp3':last*1.15,'sl':last*0.95,'ob':ob,'candle':candle,'change12':ch12,'source':source})
+            cands.append({
+                'base':base,'mode_label':'🛡️ DUAL MODE','mode':'KOREKSI BUY',
+                'entry':last,'gain':gain_low,'pos':pos_p,'vol':vol,'high':high,'low':low,
+                'tp_scalp1':last*1.025,'tp_scalp2':last*1.05,'tp_scalp3':last*1.08,'sl_scalp':last*0.97,
+                'tp_swing1':last*1.05,'tp_swing2':last*1.10,'tp_swing3':last*1.15,'sl_swing':last*0.95,
+                'ob':ob,'candle':candle,'change12':ch12,'source':source
+            })
             time.sleep(0.4)
         except: continue
     cands=sorted(cands,key=lambda x:x['pos'],reverse=True)
@@ -144,7 +150,7 @@ def analisa():
 
 def fmt_tmg(s,r):
     ob=s['ob']
-    ob_line=f"🟢 BUY {fmt_money(ob['buy_m'])} > {fmt_money(ob['sell_m'])}" if ob['dominant']=='BUY' else f"🔴 SELL {fmt_money(ob['sell_m'])} > {fmt_money(ob['buy_m'])}"
+    ob_line=f"🟢 BUY {fmt_money(ob['buy_m'])} > {fmt_money(ob['sell_m'])}"
     src="ID" if s.get('source')=='INDODAX' else "AJ"
     return f"""┌─ #{r} {s['mode_label']} {s['base']}/IDR [{src}] ─
 │ 🛡️ {s['mode']} | Pos {s['pos']:.0f}%
@@ -159,14 +165,20 @@ def fmt_tmg(s,r):
 │ 🕯️ Candle {s['candle']['note']} {s['candle']['change']:+.2f}%
 ├────────────────
 │ 🟢 ENTRY {fmt_price(s['entry'])}
-│ 🎯 TP1 {fmt_price(s['tp1'])} (+5%)
-│ 🎯 TP2 {fmt_price(s['tp2'])} (+10%)
-│ 🎯 TP3 {fmt_price(s['tp3'])} (+15%)
-│ 🔴 SL {fmt_price(s['sl'])} (-5%)
+│ ── OPSI A: SCALPING ──
+│ 🎯 TP1 {fmt_price(s['tp_scalp1'])} (+2.5%)
+│ 🎯 TP2 {fmt_price(s['tp_scalp2'])} (+5%)
+│ 🎯 TP3 {fmt_price(s['tp_scalp3'])} (+8%)
+│ 🔴 SL {fmt_price(s['sl_scalp'])} (-3%)
+│ ── OPSI B: SWING ──
+│ 🎯 TP1 {fmt_price(s['tp_swing1'])} (+5%)
+│ 🎯 TP2 {fmt_price(s['tp_swing2'])} (+10%)
+│ 🎯 TP3 {fmt_price(s['tp_swing3'])} (+15%)
+│ 🔴 SL {fmt_price(s['sl_swing'])} (-5%)
 └─ {jam()} ─"""
 
 def fmt_rekap(list_sig):
-    txt=f"📊 REKAP {len(list_sig)} SINYAL {jam()}\nVol >100Jt | High/Low real\n────────────────\n"
+    txt=f"📊 REKAP {len(list_sig)} SINYAL {jam()}\nVol >150Jt | High/Low Real | DUAL MODE\n────────────────\n"
     for i,s in enumerate(list_sig,1):
         ob=s['ob']; icon="🟢 BUY" if ob['dominant']=='BUY' else "🔴 SELL"; src="ID" if s.get('source')=='INDODAX' else "AJ"
         txt+=f"{i}. {icon} {s['base']} [{src}] Pos {s['pos']:.0f}% Vol {fmt_money(s['vol'])} {fmt_money(ob['buy_m'])}/{fmt_money(ob['sell_m'])}\n"
@@ -193,25 +205,31 @@ def cek_tp():
     pos=load(FILE_POS,{}); stats=load(FILE_STATS,{"win":0,"loss":0,"total_sinyal":0,"tp1":0,"tp2":0,"tp3":0}); hist=load(FILE_HISTORY,[]); ch=False
     for base,data in list(pos.items()):
         try:
-            if isinstance(data, dict): entry=data['entry']; tp1=data['tp1']; tp2=data['tp2']; tp3=data['tp3']; sl=data['sl']; hit=data.get('hit',[])
-            else: entry=float(data); tp1=entry*1.05; tp2=entry*1.10; tp3=entry*1.15; sl=entry*0.95; hit=[]
+            if isinstance(data, dict): entry=data['entry']; tp_s1=data.get('tp_scalp1',data['tp1']*0.5 if 'tp1' in data else entry*1.025); tp_s2=data.get('tp_scalp2',entry*1.05); tp_s3=data.get('tp_scalp3',entry*1.08); tp_w1=data.get('tp_swing1',entry*1.05); tp_w2=data.get('tp_swing2',entry*1.10); tp_w3=data.get('tp_swing3',entry*1.15); sl_s=data.get('sl_scalp',entry*0.97); sl_w=data.get('sl_swing',entry*0.95); hit=data.get('hit',[])
+            else: entry=float(data); tp_s1=entry*1.025; tp_s2=entry*1.05; tp_s3=entry*1.08; tp_w1=entry*1.05; tp_w2=entry*1.10; tp_w3=entry*1.15; sl_s=entry*0.97; sl_w=entry*0.95; hit=[]
             key=f"{base.lower()}_idr"
             if key not in tickers: continue
             last=float(tickers[key]['last'])
-            if last>=tp1 and 'TP1' not in hit:
-                send(f"🏆 TP1 {base} +5% {fmt_price(entry)} -> {fmt_price(last)} {jam()}")
-                hit.append('TP1'); stats['tp1']=stats.get('tp1',0)+1
-                if 'WIN_COUNTED' not in hit: stats['win']=stats.get('win',0)+1; hit.append('WIN_COUNTED')
-                pos[base]={'entry':entry,'tp1':tp1,'tp2':tp2,'tp3':tp3,'sl':sl,'hit':hit}; ch=True
-            if last>=tp2 and 'TP2' not in hit:
-                send(f"🏆🏆 TP2 {base} +10% {fmt_price(entry)} -> {fmt_price(last)} {jam()}")
-                hit.append('TP2'); stats['tp2']=stats.get('tp2',0)+1; pos[base]={'entry':entry,'tp1':tp1,'tp2':tp2,'tp3':tp3,'sl':sl,'hit':hit}; ch=True
-            if last>=tp3 and 'TP3' not in hit:
-                send(f"🏆🏆🏆 TP3 {base} +15% {fmt_price(entry)} -> {fmt_price(last)} {jam()}\n{fmt_winrate()}")
-                hit.append('TP3'); stats['tp3']=stats.get('tp3',0)+1; pos.pop(base); hist.append({"base":base,"pnl":"WIN"}); ch=True; continue
-            if last<=sl:
+            # SCALP
+            if last>=tp_s1 and 'SCALP1' not in hit:
+                send(f"⚡ SCALP TP1 {base} +2.5% {fmt_price(entry)} -> {fmt_price(last)} {jam()}")
+                hit.append('SCALP1'); 
+                if 'WIN_COUNTED' not in hit: stats['win']=stats.get('win',0)+1; stats['tp1']=stats.get('tp1',0)+1; hit.append('WIN_COUNTED')
+                pos[base].update({'hit':hit}) if base in pos and isinstance(pos[base],dict) else None; ch=True
+            if last>=tp_s2 and 'SCALP2' not in hit:
+                send(f"⚡⚡ SCALP TP2 {base} +5% {fmt_price(entry)} -> {fmt_price(last)} {jam()}")
+                hit.append('SCALP2'); stats['tp2']=stats.get('tp2',0)+1; ch=True
+            if last>=tp_s3 and 'SCALP3' not in hit:
+                send(f"⚡⚡⚡ SCALP TP3 {base} +8% {fmt_price(entry)} -> {fmt_price(last)} {jam()}\n{fmt_winrate()}")
+                hit.append('SCALP3'); stats['tp3']=stats.get('tp3',0)+1
+            # SWING
+            if last>=tp_w3 and 'SWING3' not in hit:
+                send(f"🏆🏆🏆 SWING TP3 {base} +15% {fmt_price(entry)} -> {fmt_price(last)} {jam()}\n{fmt_winrate()}")
+                pos.pop(base); hist.append({"base":base,"pnl":"WIN"}); ch=True; continue
+            if last<=sl_w and 'SL' not in hit:
                 send(f"🔴 SL {base} -5% {fmt_price(entry)} -> {fmt_price(last)} {jam()}\n{fmt_winrate()}")
                 stats['loss']=stats.get('loss',0)+1; pos.pop(base); hist.append({"base":base,"pnl":"LOSS"}); ch=True
+            if base in pos and isinstance(pos[base],dict): pos[base]['hit']=hit
         except: continue
     if ch: save(FILE_POS,pos); save(FILE_STATS,stats); save(FILE_HISTORY,hist)
 
@@ -234,7 +252,7 @@ def handle():
     except: pass
 
 def main():
-    time.sleep(2); send(f"✅ V9.3-FINAL AKTIF {jam()}\nVol >100Jt | High/Low Real Ajaib/Indodax\nFormat LOCKED + High/Low\n/winrate | /clear")
+    time.sleep(2); send(f"✅ V9.4-DUAL-MODE-150JT-HIGHLOW AKTIF {jam()}\nVol >150Jt | High/Low Real | DUAL TP\nOpsi A Scalp 2.5/5/8% Opsi B Swing 5/10/15%\nFormat & Filter LOCKED\n/winrate | /clear | /scan")
     loop=0
     while True:
         try:
@@ -247,7 +265,8 @@ def main():
                     send(fmt_rekap(sig)); time.sleep(1)
                     for i,s in enumerate(sig,1):
                         if s['base'] in pos: continue
-                        send(fmt_tmg(s,i)); pos[s['base']]={'entry':s['entry'],'tp1':s['tp1'],'tp2':s['tp2'],'tp3':s['tp3'],'sl':s['sl'],'hit':[]}; save(FILE_POS,pos)
+                        send(fmt_tmg(s,i))
+                        pos[s['base']]={'entry':s['entry'],'tp_scalp1':s['tp_scalp1'],'tp_scalp2':s['tp_scalp2'],'tp_scalp3':s['tp_scalp3'],'sl_scalp':s['sl_scalp'],'tp_swing1':s['tp_swing1'],'tp_swing2':s['tp_swing2'],'tp_swing3':s['tp_swing3'],'sl_swing':s['sl_swing'],'hit':[]}; save(FILE_POS,pos)
                         cooldown[s['base']]=now().isoformat(); save(FILE_COOLDOWN,cooldown)
                         stats['total_sinyal']=stats.get('total_sinyal',0)+1; save(FILE_STATS,stats); time.sleep(0.8)
             loop+=1; time.sleep(30)
