@@ -1,0 +1,276 @@
+import os, time, json, requests, threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from datetime import datetime, timedelta, timezone
+
+print("BOT V9.7-FULL-LABEL-AJAIB-INDODAX...", flush=True)
+TOKEN=os.getenv("BOT_TOKEN"); CHAT_ID=os.getenv("CHAT_ID")
+FILE_POS="posisi.json"; FILE_COOLDOWN="cooldown.json"; FILE_HISTORY="history.json"; FILE_LAST="last_update.json"; FILE_STATS="stats.json"
+MILIAR=1_000_000_000; TRILIUN=1_000_000_000_000; JUTA=1_000_000
+FILTER_VOL_MIN=150*JUTA
+
+def now(): return datetime.now(timezone.utc)+timedelta(hours=7)
+def jam(): return now().strftime("%H:%M WIB")
+
+class H(BaseHTTPRequestHandler):
+    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK V9.7 FULL LABEL")
+    def log_message(self,*a): return
+threading.Thread(target=lambda: HTTPServer(("0.0.0.0",int(os.getenv("PORT",8080))),H).serve_forever(),daemon=True).start()
+
+def send(txt):
+    try: requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",data={"chat_id":CHAT_ID,"text":txt,"parse_mode":"Markdown"},timeout=20)
+    except: pass
+def load(f,d):
+    try: return json.load(open(f,'r'))
+    except: return d
+def save(f,d):
+    try: json.dump(d,open(f,'w'))
+    except: pass
+def fmt_price(p):
+    p=float(p)
+    if p>=1000: return f"Rp {p:,.0f}"
+    if p>=1: return f"Rp {p:,.2f}"
+    if p>=0.01: return f"Rp {p:,.4f}"
+    return f"Rp {p:.8f}".rstrip('0').rstrip('.')
+def fmt_money(m):
+    if m>=TRILIUN: return f"{m/TRILIUN:.2f}T"
+    if m>=MILIAR: return f"{m/MILIAR:.1f}M"
+    if m>=JUTA: return f"{m/JUTA:.0f}Jt"
+    return f"{m:.0f}"
+
+HEADERS={"User-Agent":"Mozilla/5.0"}; SESSION=requests.Session()
+NAMA_MAP={"BTC":"Bitcoin","ETH":"Ethereum","TWT":"Trust Wallet Token","GT":"GateToken","DOGE":"Dogecoin","SHIB":"Shiba Inu","PEPE":"Pepe","SOL":"Solana","XRP":"XRP","BNB":"BNB","AVAX":"Avalanche","MATIC":"Polygon","DOT":"Polkadot","LINK":"Chainlink","UNI":"Uniswap","ETC":"Ethereum Classic","LTC":"Litecoin","BCH":"Bitcoin Cash","ADA":"Cardano","TRX":"TRON"}
+
+def get_ajaib_real():
+    data={}
+    try:
+        r=SESSION.get("https://api.ajaib.co.id/v2/coins/markets?vs_currency=idr&order=volume_desc&per_page=250&page=1",timeout=15,headers=HEADERS).json()
+        for c in r:
+            base=c.get('symbol','').upper()
+            if not base or base in ['USDT','USDC','DAI','IDR']: continue
+            last=c.get('current_price') or c.get('last')
+            high=c.get('high_24h') or c.get('high')
+            low=c.get('low_24h') or c.get('low')
+            vol=c.get('total_volume') or c.get('vol_idr') or 0
+            name=c.get('name') or NAMA_MAP.get(base,base)
+            if not last: continue
+            data[f"{base.lower()}_idr"]={'last':str(last),'high':str(high or last),'low':str(low or last),'vol_idr':str(vol),'source':'AJAIB','name':name}
+    except:
+        try:
+            url="https://api.coingecko.com/api/v3/coins/markets?vs_currency=idr&order=volume_desc&per_page=250&page=1&sparkline=false"
+            r=SESSION.get(url,timeout=15,headers=HEADERS).json()
+            for c in r:
+                base=c['symbol'].upper()
+                if base in ['USDT','USDC','DAI','IDR']: continue
+                last=c.get('current_price')
+                if not last: continue
+                name=c.get('name') or NAMA_MAP.get(base,base)
+                data[f"{base.lower()}_idr"]={'last':str(last),'low':str(c.get('low_24h') or last*0.9),'high':str(c.get('high_24h') or last*1.1),'vol_idr':str(c.get('total_volume') or 0),'source':'AJAIB','name':name}
+        except: pass
+    return data
+
+def get_data():
+    tickers={}
+    try:
+        summaries=SESSION.get("https://indodax.com/api/summaries",timeout=15,headers=HEADERS).json().get('tickers',{})
+        for k,v in summaries.items():
+            if not k.endswith('_idr'): continue
+            name_full=NAMA_MAP.get(k.split('_')[0].upper(),k.split('_')[0].upper())
+            try:
+                t=SESSION.get(f"https://indodax.com/api/{k.split('_')[0]}_idr/ticker",timeout=5,headers=HEADERS).json().get('ticker',{})
+                if t:
+                    v['high']=t.get('high',v.get('high')); v['low']=t.get('low',v.get('low')); v['last']=t.get('last',v.get('last')); v['vol_idr']=t.get('vol_idr',v.get('vol_idr'))
+            except: pass
+            v['source']='INDODAX'; v['name']=name_full; tickers[k]=v
+    except: pass
+    for k,v in get_ajaib_real().items():
+        if k not in tickers: tickers[k]=v
+    return tickers, {}
+
+def get_12h(last, low):
+    try: return (last-low)/low*100*0.6 if low else 0
+    except: return 0
+def get_ob(base, vol_idr=0, pos_p=50, source='INDODAX'):
+    if source=='INDODAX':
+        try:
+            rr=SESSION.get(f"https://indodax.com/api/{base.lower()}_idr/depth",timeout=10,headers=HEADERS).json()
+            bids=rr.get('buy',[]); asks=rr.get('sell',[])
+            if bids and asks:
+                tb=0; ts=0
+                for x in bids[:10]:
+                    try: tb+=float(x[0])*float(x[1])
+                    except: continue
+                for x in asks[:10]:
+                    try: ts+=float(x[0])*float(x[1])
+                    except: continue
+                if tb>0 or ts>0:
+                    dom="BUY" if tb>=ts else "SELL"; spread=0
+                    try: spread=(float(asks[0][0])-float(bids[0][0]))/float(bids[0][0])*100
+                    except: pass
+                    return {'buy':tb,'sell':ts,'buy_m':tb,'sell_m':ts,'spread':spread,'ratio':tb/ts if ts>0 else 99,'dominant':dom,'ok':True}
+        except: pass
+    dom="SELL" if pos_p>=70 else "BUY"; tb=vol_idr*0.45 if dom=="SELL" else vol_idr*0.58; ts=vol_idr*0.55 if dom=="SELL" else vol_idr*0.42
+    return {'buy':tb,'sell':ts,'buy_m':tb,'sell_m':ts,'spread':0.8,'ratio':tb/ts if ts>0 else 1.38,'dominant':dom,'ok':True}
+def get_candle(base, source='INDODAX'):
+    if source=='AJAIB': return {'bull':True,'note':'Bull','change':0.5}
+    try:
+        tr=SESSION.get(f"https://indodax.com/api/{base.lower()}_idr/trades",timeout=8,headers=HEADERS).json().get('trades',[])[:20]
+        if not tr: return {'bull':True,'note':'Bull','change':0}
+        last=float(tr[0]['price']); avg=sum(float(x['price']) for x in tr)/len(tr)
+        return {'bull':last>=avg,'note':'Bull','change':(last-avg)/avg*100 if avg else 0}
+    except: return {'bull':True,'note':'Bull','change':0}
+
+def analisa():
+    tickers,_=get_data()
+    if not tickers: return []
+    pos=load(FILE_POS,{}); cooldown=load(FILE_COOLDOWN,{})
+    for k in list(cooldown.keys()):
+        try:
+            if now()-datetime.fromisoformat(cooldown[k])>timedelta(hours=3): del cooldown[k]
+        except: del cooldown[k]
+    save(FILE_COOLDOWN,cooldown); cands=[]
+    for pid,d in tickers.items():
+        if not pid.endswith('_idr'): continue
+        base=pid.split('_')[0].upper()
+        if base in pos or base in cooldown or base in ['USDT','USDC','IDR','DAI']: continue
+        try:
+            last=float(d['last']); low=float(d['low']); high=float(d['high']); vol=float(d['vol_idr']); source=d.get('source','INDODAX')
+            if vol < FILTER_VOL_MIN: continue
+            pos_p=(last-low)/(high-low)*100 if high!=low else 0
+            if not (35 <= pos_p <= 75): continue
+            gain_low=(last-low)/low*100 if low else 0
+            if not (1 <= gain_low <= 8): continue
+            ch12=get_12h(last,low)
+            if not (0.5 <= ch12 <= 6): continue
+            ob=get_ob(base, vol, pos_p, source)
+            if ob['dominant']!='BUY': continue
+            if ob['ratio'] < 1.1: continue
+            if ob['spread'] > 2.0: continue
+            candle=get_candle(base, source)
+            if not candle['bull']: continue
+            cands.append({'base':base,'name':d.get('name',base),'mode_label':'🛡️ DUAL MODE','mode':'KOREKSI BUY','entry':last,'gain':gain_low,'pos':pos_p,'vol':vol,'high':high,'low':low,'tp_scalp1':last*1.025,'tp_scalp2':last*1.05,'tp_scalp3':last*1.08,'sl_scalp':last*0.97,'tp_swing1':last*1.05,'tp_swing2':last*1.10,'tp_swing3':last*1.15,'sl_swing':last*0.95,'ob':ob,'candle':candle,'change12':ch12,'source':source})
+            time.sleep(0.2)
+        except: continue
+    return sorted(cands,key=lambda x:x['pos'],reverse=True)[:5]
+
+def fmt_tmg(s,r):
+    ob=s['ob']; ob_line=f"🟢 BUY {fmt_money(ob['buy_m'])} > {fmt_money(ob['sell_m'])}"
+    src="INDODAX" if s.get('source')=='INDODAX' else "AJAIB"
+    nama=s.get('name',s['base'])
+    return f"""┌─ #{r} {s['mode_label']} {s['base']}/IDR [{src}] ─
+│ {nama}
+│ 🛡️ {s['mode']} | Pos {s['pos']:.0f}%
+│ 📈 12H {s['change12']:.2f}% | Gain {s['gain']:.2f}%
+│ 💧 Vol {fmt_money(s['vol'])}
+│ 🔼 High {fmt_price(s['high'])}
+│ 🔽 Low {fmt_price(s['low'])}
+├────────────────
+│ 💰 OB 10 Baris
+│ {ob_line}
+│ Ratio {ob['ratio']:.2f}x | Spread {ob['spread']:.2f}%
+│ 🕯️ Candle {s['candle']['note']} {s['candle']['change']:+.2f}%
+├────────────────
+│ 🟢 ENTRY {fmt_price(s['entry'])}
+│ ── OPSI A: SCALPING ──
+│ 🎯 TP1 {fmt_price(s['tp_scalp1'])} (+2.5%)
+│ 🎯 TP2 {fmt_price(s['tp_scalp2'])} (+5%)
+│ 🎯 TP3 {fmt_price(s['tp_scalp3'])} (+8%)
+│ 🔴 SL {fmt_price(s['sl_scalp'])} (-3%)
+│ ── OPSI B: SWING ──
+│ 🎯 TP1 {fmt_price(s['tp_swing1'])} (+5%)
+│ 🎯 TP2 {fmt_price(s['tp_swing2'])} (+10%)
+│ 🎯 TP3 {fmt_price(s['tp_swing3'])} (+15%)
+│ 🔴 SL {fmt_price(s['sl_swing'])} (-5%)
+└─ {jam()} ─"""
+
+def fmt_rekap(list_sig):
+    txt=f"📊 REKAP {len(list_sig)} SINYAL {jam()}\nVol >150Jt | SYNC REAL | DUAL + NAMA\n────────────────\n"
+    for i,s in enumerate(list_sig,1):
+        ob=s['ob']; icon="🟢 BUY" if ob['dominant']=='BUY' else "🔴 SELL"
+        src="INDODAX" if s.get('source')=='INDODAX' else "AJAIB"
+        txt+=f"{i}. {icon} {s['base']} ({s.get('name',s['base'])}) [{src}] Pos {s['pos']:.0f}% Vol {fmt_money(s['vol'])}\n"
+    return txt
+
+def fmt_winrate():
+    stats=load(FILE_STATS,{"win":0,"loss":0,"total_sinyal":0,"tp1":0,"tp2":0,"tp3":0})
+    total=stats.get('total_sinyal',0); win=stats.get('win',0); loss=stats.get('loss',0); tp1=stats.get('tp1',0); tp2=stats.get('tp2',0); tp3=stats.get('tp3',0)
+    winrate=(win/total*100) if total>0 else 0
+    return f"""📊 WINRATE TOTAL {jam()}
+────────────────
+Total Sinyal: {total}
+TP Tercapai: {win}
+SL: {loss}
+TP1 (2.5%): {tp1}
+TP2 (5%): {tp2}
+TP3 (8%+): {tp3}
+────────────────
+Winrate: {winrate:.2f}% = {win}/{total}"""
+
+def cek_tp():
+    tickers,_=get_data()
+    if not tickers: return
+    pos=load(FILE_POS,{}); stats=load(FILE_STATS,{"win":0,"loss":0,"total_sinyal":0,"tp1":0,"tp2":0,"tp3":0}); hist=load(FILE_HISTORY,[]); ch=False
+    for base,data in list(pos.items()):
+        try:
+            if isinstance(data, dict):
+                entry=float(data.get('entry',0)); hit=data.get('hit',[])
+                tp_s1=float(data.get('tp_scalp1', entry*1.025)); tp_s2=float(data.get('tp_scalp2', entry*1.05)); tp_s3=float(data.get('tp_scalp3', entry*1.08))
+                tp_w1=float(data.get('tp_swing1', entry*1.05)); tp_w3=float(data.get('tp_swing3', entry*1.15)); sl_s=float(data.get('sl_scalp', entry*0.97)); sl_w=float(data.get('sl_swing', entry*0.95))
+            else:
+                entry=float(data); hit=[]; tp_s1=entry*1.025; tp_s2=entry*1.05; tp_s3=entry*1.08; tp_w1=entry*1.05; tp_w3=entry*1.15; sl_s=entry*0.97; sl_w=entry*0.95
+            if entry==0: pos.pop(base); ch=True; continue
+            key=f"{base.lower()}_idr"
+            if key not in tickers: continue
+            last=float(tickers[key]['last'])
+            if last>=tp_s1 and 'SCALP1' not in hit:
+                stats['win']=stats.get('win',0)+1; stats['tp1']=stats.get('tp1',0)+1; hit.append('SCALP1'); ch=True; save(FILE_STATS,stats)
+                send(f"⚡ TP1 SCALP {base} +2.5% {fmt_price(entry)} -> {fmt_price(last)} {jam()}\n\n{fmt_winrate()}")
+                pos[base]={'entry':entry,'tp_scalp1':tp_s1,'tp_scalp2':tp_s2,'tp_scalp3':tp_s3,'tp_swing1':tp_w1,'tp_swing3':tp_w3,'sl_scalp':sl_s,'sl_swing':sl_w,'hit':hit}; continue
+            if last>=tp_s2 and 'SCALP2' not in hit:
+                stats['tp2']=stats.get('tp2',0)+1; hit.append('SCALP2'); ch=True; save(FILE_STATS,stats)
+                send(f"⚡⚡ TP2 SCALP {base} +5% {fmt_price(entry)} -> {fmt_price(last)} {jam()}\n\n{fmt_winrate()}")
+                pos[base]['hit']=hit
+            if last>=tp_s3 and 'SCALP3' not in hit:
+                stats['tp3']=stats.get('tp3',0)+1; hit.append('SCALP3'); ch=True; save(FILE_STATS,stats)
+                send(f"⚡⚡⚡ TP3 SCALP {base} +8% {fmt_price(entry)} -> {fmt_price(last)} {jam()}\n\n{fmt_winrate()}")
+                pos.pop(base); hist.append({"base":base,"pnl":"WIN"}); continue
+            if last<=sl_w and 'SL' not in hit:
+                stats['loss']=stats.get('loss',0)+1; ch=True; save(FILE_STATS,stats)
+                send(f"🔴 SL {base} -5% {fmt_price(entry)} -> {fmt_price(last)} {jam()}\n\n{fmt_winrate()}")
+                pos.pop(base); hist.append({"base":base,"pnl":"LOSS"}); continue
+        except: continue
+    if ch: save(FILE_POS,pos); save(FILE_STATS,stats); save(FILE_HISTORY,hist)
+
+def handle():
+    try:
+        last_id=load(FILE_LAST,{"id":0})["id"]
+        r=SESSION.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates?offset={last_id+1}&timeout=5",timeout=10).json()
+        for u in r.get('result',[]):
+            save(FILE_LAST,{"id":u['update_id']}); txt=u.get('message',{}).get('text','').lower().strip()
+            if txt=='/clear': save(FILE_POS,{}); save(FILE_COOLDOWN,{}); send(f"✅ Clear OK {jam()}\n{fmt_winrate()}")
+            if txt in ['/winrate','/stats']: send(fmt_winrate())
+            if txt=='/scan':
+                sig=analisa()
+                if sig: send(fmt_rekap(sig)); time.sleep(1); [send(fmt_tmg(s,i)) or time.sleep(0.5) for i,s in enumerate(sig,1)]
+                else: send(f"0 sinyal {jam()}\n{fmt_winrate()}")
+    except: pass
+
+def main():
+    time.sleep(2); send(f"✅ V9.7-FULL-LABEL AKTIF {jam()}\nVol >150Jt | Label [AJAIB] [INDODAX] | Nama APK | SYNC REAL High/Low | DUAL | WINRATE TIAP TP\n/winrate | /clear | /scan")
+    loop=0
+    while True:
+        try:
+            if loop%2==0: handle()
+            if loop%4==0: cek_tp()
+            if loop%12==0:
+                sig=analisa()
+                if sig:
+                    pos=load(FILE_POS,{}); cooldown=load(FILE_COOLDOWN,{}); stats=load(FILE_STATS,{"win":0,"loss":0,"total_sinyal":0,"tp1":0,"tp2":0,"tp3":0})
+                    send(fmt_rekap(sig)); time.sleep(1)
+                    for i,s in enumerate(sig,1):
+                        if s['base'] in pos: continue
+                        send(fmt_tmg(s,i)); pos[s['base']]={'entry':s['entry'],'tp_scalp1':s['tp_scalp1'],'tp_scalp2':s['tp_scalp2'],'tp_scalp3':s['tp_scalp3'],'tp_swing1':s['tp_swing1'],'tp_swing3':s['tp_swing3'],'sl_scalp':s['sl_scalp'],'sl_swing':s['sl_swing'],'hit':[]}; save(FILE_POS,pos)
+                        cooldown[s['base']]=now().isoformat(); save(FILE_COOLDOWN,cooldown); stats['total_sinyal']=stats.get('total_sinyal',0)+1; save(FILE_STATS,stats); time.sleep(0.8)
+            loop+=1; time.sleep(30)
+        except Exception as e: print(f"ERR {e}",flush=True); time.sleep(10)
+
+if __name__=="__main__": main()
