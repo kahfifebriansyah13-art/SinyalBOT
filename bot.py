@@ -2,7 +2,7 @@ import os, time, json, requests, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta, timezone
 
-print("BOT V10.3-FINAL MODE B...", flush=True)
+print("BOT V10.3.1 DEBUG...", flush=True)
 TOKEN=os.getenv("BOT_TOKEN"); CHAT_ID=os.getenv("CHAT_ID")
 FILE_POS="posisi.json"; FILE_COOLDOWN="cooldown.json"; FILE_HISTORY="history.json"; FILE_LAST="last_update.json"; FILE_STATS="stats.json"
 MILIAR=1_000_000_000; TRILIUN=1_000_000_000_000; JUTA=1_000_000
@@ -12,7 +12,7 @@ def now(): return datetime.now(timezone.utc)+timedelta(hours=7)
 def jam(): return now().strftime("%H:%M WIB")
 
 class H(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK V10.3 MODE B")
+    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK V10.3.1 DEBUG")
     def log_message(self,*a): return
 threading.Thread(target=lambda: HTTPServer(("0.0.0.0",int(os.getenv("PORT",8080))),H).serve_forever(),daemon=True).start()
 
@@ -41,7 +41,6 @@ def fmt_money(m):
         if m>=JUTA: return f"{m/JUTA:.0f}Jt"
         return f"{m:.0f}"
     except: return "0"
-# === WARNA MERAH / HIJAU ===
 def fmt_change(v):
     try: v=float(v)
     except: v=0
@@ -85,7 +84,7 @@ def get_indodax_real():
                 if not rt: continue
                 last=rt.get('last'); high=rt.get('high'); low=rt.get('low'); vol=rt.get('vol_idr')
                 if not last or not high or not low: continue
-                change_24h=0  # Nanti ditimpa Ajaib di get_data()
+                change_24h=0
                 tickers[k]={'last':str(last),'high':str(high),'low':str(low),'vol_idr':str(vol),'change_24h':str(change_24h),'source':'INDODAX','name':NAMA_MAP.get(base,base)}
                 time.sleep(0.05)
             except: continue
@@ -102,7 +101,6 @@ def get_data():
             combined[k]['change_24h']=v['change_24h']
     return combined, {}
 
-# === TA SR HORIZONTAL ===
 def get_sr(last, high, low):
     rng=high-low
     if rng<=0: return {'support1':low,'support2':low,'support_nearest':low,'resistance':high,'dist_support':99,'near_support':False}
@@ -146,6 +144,62 @@ def get_candle(base, source='INDODAX'):
         return {'bull':last>=avg,'note':'Bull','change':(last-avg)/avg*100 if avg else 0}
     except: return {'bull':True,'note':'Bull','change':0}
 
+# === DEBUG BARU ===
+def analisa_debug():
+    tickers,_=get_data()
+    pos=load(FILE_POS,{}); cooldown=load(FILE_COOLDOWN,{})
+    c={'total':len(tickers),'vol':0,'pos':0,'gain':0,'change':0,'sr':0,'ob':0,'candle':0}
+    contoh_sr=[]; contoh_ob=[]; contoh_candle=[]
+    for pid,d in tickers.items():
+        if not pid.endswith('_idr'): continue
+        base=pid.split('_')[0].upper()
+        if base in pos or base in cooldown or base in ['USDT','USDC','IDR','DAI']: continue
+        try:
+            last=float(d['last']); low=float(d['low']); high=float(d['high']); vol=float(d['vol_idr']); change_24h=float(d.get('change_24h',0)); source=d.get('source','INDODAX')
+            if vol < FILTER_VOL_MIN: continue
+            c['vol']+=1
+            pos_p=(last-low)/(high-low)*100 if high!=low else 0
+            if not (35 <= pos_p <= 65): continue
+            c['pos']+=1
+            gain_low=(last-low)/low*100 if low else 0
+            if not (1.5 <= gain_low <= 8): continue
+            c['gain']+=1
+            if change_24h < 1.5: continue
+            c['change']+=1
+            sr=get_sr(last, high, low)
+            if not sr['near_support']:
+                if len(contoh_sr)<3: contoh_sr.append(f"{base} dist {sr['dist_support']:.1f}% Pos {pos_p:.0f}% Gain {gain_low:.1f}% 24H {change_24h:.1f}%")
+                continue
+            c['sr']+=1
+            ob=get_ob(base, vol, pos_p, source)
+            if ob['dominant']!='BUY' or ob['ratio']<1.1 or ob['spread']>2.0:
+                if len(contoh_ob)<3: contoh_ob.append(f"{base} OB {ob['dominant']} ratio {ob['ratio']:.2f} spread {ob['spread']:.2f}%")
+                continue
+            c['ob']+=1
+            candle=get_candle(base, source)
+            if not candle['bull']:
+                if len(contoh_candle)<3: contoh_candle.append(f"{base} candle {candle['change']:.2f}%")
+                continue
+            c['candle']+=1
+        except: continue
+    txt=f"""🔍 DEBUG FILTER {jam()}
+────────────────
+Total koin: {c['total']}
+Lolos Vol >350Jt: {c['vol']}
+Lolos Pos 35-65%: {c['pos']}
+Lolos Gain 1.5-8%: {c['gain']}
+Lolos 24H >1.5%: {c['change']}
+Lolos SR <=12%: {c['sr']}
+Lolos OB BUY: {c['ob']}
+Lolos Candle Bullish: {c['candle']} = SINYAL FINAL
+────────────────
+"""
+    if contoh_sr: txt+="❌ Gugur di SR:\n"+"\n".join(contoh_sr)+"\n"
+    if contoh_ob: txt+="❌ Gugur di OB:\n"+"\n".join(contoh_ob)+"\n"
+    if contoh_candle: txt+="❌ Gugur di Candle:\n"+"\n".join(contoh_candle)+"\n"
+    txt+=f"Posisi open: {len(pos)} | Cooldown: {len(cooldown)}"
+    return txt
+
 def analisa():
     tickers,_=get_data()
     if not tickers: return []
@@ -161,19 +215,19 @@ def analisa():
         if base in pos or base in cooldown or base in ['USDT','USDC','IDR','DAI']: continue
         try:
             last=float(d['last']); low=float(d['low']); high=float(d['high']); vol=float(d['vol_idr']); change_24h=float(d.get('change_24h',0)); source=d.get('source','INDODAX')
-            if vol < FILTER_VOL_MIN: continue  # Vol >350Jt - TETAP
+            if vol < FILTER_VOL_MIN: continue
             pos_p=(last-low)/(high-low)*100 if high!=low else 0
-            if not (35 <= pos_p <= 65): continue  # POS 35-65% - DIUBAH B
+            if not (35 <= pos_p <= 65): continue
             gain_low=(last-low)/low*100 if low else 0
-            if not (1.5 <= gain_low <= 8): continue  # Gain 1.5-8% - DIUBAH B
-            if change_24h < 1.5: continue  # Change 24H >1.5% - DIUBAH B
-            sr=get_sr(last, high, low)  # TA SR - TETAP
+            if not (1.5 <= gain_low <= 8): continue
+            if change_24h < 1.5: continue
+            sr=get_sr(last, high, low)
             if not sr['near_support']: continue
             ob=get_ob(base, vol, pos_p, source)
             if ob['dominant']!='BUY': continue
             if ob['ratio'] < 1.1: continue
             if ob['spread'] > 2.0: continue
-            candle=get_candle(base, source)  # TA Candle Bullish - TETAP
+            candle=get_candle(base, source)
             if not candle['bull']: continue
             cands.append({'base':base,'name':d.get('name',base),'mode_label':'🛡️ DUAL MODE','mode':'KOREKSI BUY','entry':last,'gain':gain_low,'pos':pos_p,'vol':vol,'high':high,'low':low,'change24':change_24h,'sr':sr,'tp_scalp1':last*1.025,'tp_scalp2':last*1.05,'tp_scalp3':last*1.08,'sl_scalp':last*0.97,'tp_swing1':last*1.05,'tp_swing2':last*1.10,'tp_swing3':last*1.15,'sl_swing':last*0.95,'ob':ob,'candle':candle,'source':source})
             time.sleep(0.1)
@@ -285,6 +339,7 @@ def handle():
             if txt=='/clear': save(FILE_POS,{}); save(FILE_COOLDOWN,{}); send(f"✅ Clear OK {jam()}\n{fmt_winrate()}")
             if txt=='/resetwinrate': save(FILE_STATS,{"win":0,"loss":0,"total_sinyal":0,"tp1":0,"tp2":0,"tp3":0}); send(f"✅ Winrate direset {jam()}\n{fmt_winrate()}")
             if txt in ['/winrate','/stats']: send(fmt_winrate())
+            if txt=='/debug': send(analisa_debug())
             if txt=='/scan':
                 sig=analisa()
                 if sig: send(fmt_rekap(sig)); time.sleep(1); [send(fmt_tmg(s,i)) or time.sleep(0.5) for i,s in enumerate(sig,1)]
@@ -292,7 +347,7 @@ def handle():
     except: pass
 
 def main():
-    time.sleep(2); send(f"✅ V10.3 MODE B AKTIF {jam()}\nVol >350Jt | Pos 35-65% | Gain 1.5-8% | 24H >1.5% | TA SR + Candle Bullish | [AJAIB] [INDODAX] | Harga REAL APK\n/winrate | /resetwinrate | /clear | /scan")
+    time.sleep(2); send(f"✅ V10.3.1 DEBUG AKTIF {jam()}\nVol >350Jt | Pos 35-65% | Gain 1.5-8% | 24H >1.5% | TA SR + Candle Bullish\n/debug | /winrate | /clear | /scan")
     loop=0
     while True:
         try:
