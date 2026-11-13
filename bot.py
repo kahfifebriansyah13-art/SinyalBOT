@@ -2,7 +2,7 @@ import os, time, json, requests, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta, timezone
 
-print("BOT V10.3.1 DEBUG...", flush=True)
+print("BOT V10.4-FINAL...", flush=True)
 TOKEN=os.getenv("BOT_TOKEN"); CHAT_ID=os.getenv("CHAT_ID")
 FILE_POS="posisi.json"; FILE_COOLDOWN="cooldown.json"; FILE_HISTORY="history.json"; FILE_LAST="last_update.json"; FILE_STATS="stats.json"
 MILIAR=1_000_000_000; TRILIUN=1_000_000_000_000; JUTA=1_000_000
@@ -12,7 +12,7 @@ def now(): return datetime.now(timezone.utc)+timedelta(hours=7)
 def jam(): return now().strftime("%H:%M WIB")
 
 class H(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK V10.3.1 DEBUG")
+    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"OK V10.4")
     def log_message(self,*a): return
 threading.Thread(target=lambda: HTTPServer(("0.0.0.0",int(os.getenv("PORT",8080))),H).serve_forever(),daemon=True).start()
 
@@ -84,8 +84,7 @@ def get_indodax_real():
                 if not rt: continue
                 last=rt.get('last'); high=rt.get('high'); low=rt.get('low'); vol=rt.get('vol_idr')
                 if not last or not high or not low: continue
-                change_24h=0
-                tickers[k]={'last':str(last),'high':str(high),'low':str(low),'vol_idr':str(vol),'change_24h':str(change_24h),'source':'INDODAX','name':NAMA_MAP.get(base,base)}
+                tickers[k]={'last':str(last),'high':str(high),'low':str(low),'vol_idr':str(vol),'change_24h':'0','source':'INDODAX','name':NAMA_MAP.get(base,base)}
                 time.sleep(0.05)
             except: continue
     except: pass
@@ -95,18 +94,14 @@ def get_data():
     indodax=get_indodax_real(); ajaib=get_ajaib_real()
     combined=indodax.copy()
     for k,v in ajaib.items():
-        if k not in combined:
-            combined[k]=v
-        else:
-            combined[k]['change_24h']=v['change_24h']
+        if k not in combined: combined[k]=v
+        else: combined[k]['change_24h']=v['change_24h']
     return combined, {}
 
 def get_sr(last, high, low):
     rng=high-low
     if rng<=0: return {'support1':low,'support2':low,'support_nearest':low,'resistance':high,'dist_support':99,'near_support':False}
-    s_major=low
-    s_kuat=low + rng*0.382
-    r_high=high
+    s_major=low; s_kuat=low + rng*0.382; r_high=high
     candidates=[s_major, s_kuat]
     below=[c for c in candidates if c <= last]
     support_nearest=max(below) if below else s_major
@@ -144,7 +139,6 @@ def get_candle(base, source='INDODAX'):
         return {'bull':last>=avg,'note':'Bull','change':(last-avg)/avg*100 if avg else 0}
     except: return {'bull':True,'note':'Bull','change':0}
 
-# === DEBUG BARU ===
 def analisa_debug():
     tickers,_=get_data()
     pos=load(FILE_POS,{}); cooldown=load(FILE_COOLDOWN,{})
@@ -164,7 +158,7 @@ def analisa_debug():
             gain_low=(last-low)/low*100 if low else 0
             if not (1.5 <= gain_low <= 8): continue
             c['gain']+=1
-            if change_24h < 1.5: continue
+            if change_24h < -2: continue  # DIUBAH V10.4: 24H > -2%
             c['change']+=1
             sr=get_sr(last, high, low)
             if not sr['near_support']:
@@ -188,7 +182,7 @@ Total koin: {c['total']}
 Lolos Vol >350Jt: {c['vol']}
 Lolos Pos 35-65%: {c['pos']}
 Lolos Gain 1.5-8%: {c['gain']}
-Lolos 24H >1.5%: {c['change']}
+Lolos 24H >-2%: {c['change']}
 Lolos SR <=12%: {c['sr']}
 Lolos OB BUY: {c['ob']}
 Lolos Candle Bullish: {c['candle']} = SINYAL FINAL
@@ -220,7 +214,7 @@ def analisa():
             if not (35 <= pos_p <= 65): continue
             gain_low=(last-low)/low*100 if low else 0
             if not (1.5 <= gain_low <= 8): continue
-            if change_24h < 1.5: continue
+            if change_24h < -2: continue  # DIUBAH V10.4: 24H > -2%
             sr=get_sr(last, high, low)
             if not sr['near_support']: continue
             ob=get_ob(base, vol, pos_p, source)
@@ -270,7 +264,7 @@ def fmt_tmg(s,r):
 └─ {jam()} ─"""
 
 def fmt_rekap(list_sig):
-    txt=f"📊 REKAP {len(list_sig)} SINYAL {jam()}\nVol >350Jt | Pos 35-65% | Gain 1.5-8% | 24H >1.5% | SR BOUNCE | SYNC APK REAL\n────────────────\n"
+    txt=f"📊 REKAP {len(list_sig)} SINYAL {jam()}\nVol >350Jt | Pos 35-65% | Gain 1.5-8% | 24H >-2% | SR BOUNCE | SYNC APK REAL\n────────────────\n"
     for i,s in enumerate(list_sig,1):
         ob=s['ob']; icon="🟢 BUY" if ob['dominant']=='BUY' else "🔴 SELL"; src=s.get('source','INDODAX')
         txt+=f"{i}. {icon} {s['base']} ({s.get('name',s['base'])}) [{src}] Pos {s['pos']:.0f}% 24H {fmt_change_plain(s['change24'])} S {fmt_price(s['sr']['support_nearest'])} Vol {fmt_money(s['vol'])}\n"
@@ -347,7 +341,7 @@ def handle():
     except: pass
 
 def main():
-    time.sleep(2); send(f"✅ V10.3.1 DEBUG AKTIF {jam()}\nVol >350Jt | Pos 35-65% | Gain 1.5-8% | 24H >1.5% | TA SR + Candle Bullish\n/debug | /winrate | /clear | /scan")
+    time.sleep(2); send(f"✅ V10.4 AKTIF {jam()}\nVol >350Jt | Pos 35-65% | Gain 1.5-8% | 24H >-2% | TA SR + Candle Bullish\n/debug | /winrate | /clear | /scan")
     loop=0
     while True:
         try:
